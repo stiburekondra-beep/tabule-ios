@@ -1,9 +1,7 @@
 name: build-ios
 
-# Připraveno k přesunu do kořene budoucího veřejného repa (soubor musí být
-# na cestě .github/workflows/build-ios.yml od kořene repa, aby ho GitHub
-# Actions spustil). V lab/hodinky-niceboy/ios/ zatím jen leží jako podklad —
-# nepushuje se, dokud o tom Ondra vědomě nerozhodne (F17: teprve „až se osvědčí").
+# Build bez Macu: XcodeGen → testy na simulátoru → archiv bez podpisu → nepodepsaná .ipa
+# k instalaci přes AltStore. Spouští se při každém pushi na main.
 on:
   push:
     branches: [main]
@@ -13,8 +11,6 @@ on:
 jobs:
   build-and-test:
     runs-on: macos-latest
-    defaults:
-      run:
     steps:
       - uses: actions/checkout@v4
 
