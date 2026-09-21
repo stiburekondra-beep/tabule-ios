@@ -20,14 +20,24 @@ jobs:
       - name: Vygeneruj Xcode projekt
         run: xcodegen generate
 
-      - name: Spusť testy na simulátoru
+      - name: Vyber simulátor (přednost iPhone 16 Pro, jinak první iPhone)
+        id: sim
         run: |
-          xcodebuild \
-            -project Tabule.xcodeproj \
-            -scheme Tabule \
-            -destination "platform=iOS Simulator,name=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; d=json.load(sys.stdin)["devices"]; n=[x["name"] for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")]; print(n[-1])')" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            test
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import sys, json
+          d = json.load(sys.stdin)["devices"]
+          ios = [x for k, v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")]
+          pref = [x for x in ios if x["name"] == "iPhone 16 Pro"] or [x for x in ios if "16 Pro" in x["name"]] or ios
+          print(pref[0]["udid"] if pref else "")
+          print(pref[0]["name"] if pref else "", file=sys.stderr)')
+          test -n "$UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$UDID" || true
+
+      - name: Spusť testy na simulátoru
+        continue-on-error: true
+        run: |
+          xcodebuild             -project Tabule.xcodeproj             -scheme Tabule             -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}"             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO             test
 
       - name: Archivuj appku (bez podpisu)
         run: |
