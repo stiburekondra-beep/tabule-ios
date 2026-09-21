@@ -73,6 +73,8 @@ struct NouzovaObrazovka: View {
                 .frame(maxWidth: .infinity)
 
                 slotyPanel
+
+                LogView()
             }
             .padding()
         }

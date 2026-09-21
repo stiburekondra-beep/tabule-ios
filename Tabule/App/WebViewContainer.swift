@@ -56,6 +56,7 @@ struct WebViewContainer: UIViewRepresentable {
         func nacti(urlString: String) {
             guard !urlString.isEmpty, urlString != naposledyNactenaURL, let url = URL(string: urlString) else { return }
             naposledyNactenaURL = urlString
+            Log.sdilene.zapis(.info, "WebView: načítám \(urlString)")
             webView?.load(URLRequest(url: url, timeoutInterval: 10))
         }
 
@@ -71,16 +72,26 @@ struct WebViewContainer: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            logChybu(error, faze: "provisional")
             onChyba(error.localizedDescription)
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            logChybu(error, faze: "navigace")
             onChyba(error.localizedDescription)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            Log.sdilene.zapis(.info, "WebView načten: \(naposledyNactenaURL ?? "?")")
             onChyba(nil)
             bridge?.oznamStav()
+        }
+
+        /// Zaloguje chybu WebView i s URL, na kterou se sahalo (i klasický
+        /// `-999` „cancelled" z F18 — ať je vidět, o jakou URL šlo).
+        private func logChybu(_ error: Error, faze: String) {
+            let url = (error as NSError).userInfo[NSURLErrorFailingURLStringErrorKey] as? String ?? naposledyNactenaURL ?? "?"
+            Log.sdilene.zapis(.chyba, "WebView chyba (\(faze)): \(error.localizedDescription) · URL: \(url)")
         }
     }
 }

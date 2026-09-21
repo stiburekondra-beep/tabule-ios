@@ -62,6 +62,7 @@ final class BLEManager: NSObject, ObservableObject {
         guard central.state == .poweredOn else { return }
         let known = central.retrievePeripherals(withIdentifiers: [uuid])
         if let p = known.first {
+            Log.sdilene.zapis(.info, "zkouším uložené hodinky: \(p.name ?? uuid.uuidString)")
             pripojK(p)
         }
     }
@@ -69,11 +70,14 @@ final class BLEManager: NSObject, ObservableObject {
     func hledejAPripoj() {
         guard central.state == .poweredOn else {
             stav = .chyba("Bluetooth není zapnutý")
+            Log.sdilene.zapis(.chyba, "hledejAPripoj: Bluetooth není zapnutý")
             return
         }
         stav = .hledam
+        Log.sdilene.zapis(.info, "skenování hodinek…")
         let jizPripojene = central.retrieveConnectedPeripherals(withServices: [Self.sluzbaUUID])
         if let p = jizPripojene.first {
+            Log.sdilene.zapis(.info, "hodinky už připojené systémem: \(p.name ?? p.identifier.uuidString)")
             pripojK(p)
             return
         }
@@ -84,6 +88,7 @@ final class BLEManager: NSObject, ObservableObject {
             if case .hledam = stav {
                 central.stopScan()
                 stav = .chyba("hodinky se nenašly")
+                Log.sdilene.zapis(.chyba, "sken vypršel (15 s) — hodinky se nenašly")
             }
         }
     }
@@ -93,11 +98,15 @@ final class BLEManager: NSObject, ObservableObject {
         peripheral = p
         p.delegate = self
         stav = .pripojuji
+        Log.sdilene.zapis(.info, "připojuji k \(p.name ?? p.identifier.uuidString)…")
         central.connect(p, options: nil)
     }
 
     func odpoj() {
-        if let p = peripheral { central.cancelPeripheralConnection(p) }
+        if let p = peripheral {
+            Log.sdilene.zapis(.info, "odpojuji \(p.name ?? p.identifier.uuidString)")
+            central.cancelPeripheralConnection(p)
+        }
     }
 
     // MARK: - Odeslání rámce s čekáním na odpověď (párováno podle seq)
@@ -112,21 +121,47 @@ final class BLEManager: NSObject, ObservableObject {
     @discardableResult
     func posli(modul: UInt8, typ: UInt8, cmd: UInt8, data: [UInt8] = [], timeoutS: Double = 4.0) async throws -> FunDoBody {
         guard let zapisChar, let peripheral else {
+            Log.sdilene.zapis(.chyba, "\(Self.popisPrikazu(modul: modul, typ: typ, cmd: cmd)): hodinky nejsou připojené, neodesláno")
             throw Chyba.nepripojeno
         }
         let s = dalsiSeq()
         let frame = FunDoFrame(direction: .phoneToWatch, seq: s, body: FunDoBody(modul: modul, typ: typ, cmd: cmd, data: data))
         let bytes = frame.encode()
+        Log.sdilene.zapis(.odeslano, "seq \(s) · \(Self.popisPrikazu(modul: modul, typ: typ, cmd: cmd)) · \(bytes.hexPopis)")
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<FunDoBody, Error>) in
             let timeoutTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeoutS * 1_000_000_000))
                 guard let self else { return }
                 if let (c, _) = self.cekajici.removeValue(forKey: s) {
+                    Log.sdilene.zapis(.chyba, "seq \(s) · timeout (\(timeoutS) s), bez odpovědi")
                     c.resume(throwing: Chyba.timeout)
                 }
             }
             cekajici[s] = (cont, timeoutTask)
             peripheral.writeValue(Data(bytes), for: zapisChar, type: .withoutResponse)
+        }
+    }
+
+    /// Čitelný popis příkazu pro log — známé kombinace modul/typ/cmd
+    /// pojmenované, jinak surová čísla v hexu.
+    private static func popisPrikazu(modul: UInt8, typ: UInt8, cmd: UInt8) -> String {
+        switch (modul, typ, cmd) {
+        case (FunDoCommand.vibraceModul, FunDoCommand.vibraceTyp, FunDoCommand.vibraceCmd):
+            return "vibrace"
+        case (FunDoCommand.bateryModul, FunDoCommand.bateryTyp, FunDoCommand.bateryCmdDotaz):
+            return "baterie: dotaz"
+        case (FunDoCommand.souborModul, FunDoCommand.souborTyp, FunDoCommand.souborZahajeni):
+            return "soubor: zahájení"
+        case (FunDoCommand.souborModul, FunDoCommand.souborTyp, FunDoCommand.souborBlok):
+            return "soubor: blok"
+        case (FunDoCommand.souborModul, FunDoCommand.souborTyp, FunDoCommand.souborZakonceni):
+            return "soubor: zakončení"
+        case (FunDoCommand.ciferníkModul, FunDoCommand.ciferníkTypZapis, FunDoCommand.ciferníkPrepnoutCmd):
+            return "ciferník: přepnout"
+        case (FunDoCommand.ciferníkModul, FunDoCommand.ciferníkTypDotaz, FunDoCommand.ciferníkDotazCmd):
+            return "ciferník: seznam/stav (odhad)"
+        default:
+            return String(format: "modul 0x%02x/typ 0x%02x/cmd 0x%02x", modul, typ, cmd)
         }
     }
 
@@ -177,11 +212,13 @@ final class BLEManager: NSObject, ObservableObject {
     func posliSoubor(_ soubor: [UInt8], blokB: Int = 12288, cilovySlot: UInt8? = nil,
                       progress: (@MainActor (Double, String) -> Void)? = nil) async throws {
         _ = cilovySlot // TODO: zapojit, až se najde offset cíle v hlavičce/zahájení
+        Log.sdilene.zapis(.info, "přenos souboru: start, \(soubor.count) B celkem, blok \(blokB) B")
         await progress?(0, "zahájení…")
         _ = try await posli(modul: FunDoCommand.souborModul, typ: FunDoCommand.souborTyp, cmd: FunDoCommand.souborZahajeni,
                              data: Array(soubor.prefix(21)))
         var off = 21
         var n = 0
+        let pocetBloku = Int(ceil(Double(soubor.count - 21) / Double(blokB)))
         while off < soubor.count {
             let konec = min(off + blokB, soubor.count)
             let kus = Array(soubor[off..<konec])
@@ -191,13 +228,20 @@ final class BLEManager: NSObject, ObservableObject {
             data.append(contentsOf: [UInt8((velikost >> 24) & 0xFF), UInt8((velikost >> 16) & 0xFF), UInt8((velikost >> 8) & 0xFF), UInt8(velikost & 0xFF)])
             data.append(contentsOf: [UInt8((offset >> 24) & 0xFF), UInt8((offset >> 16) & 0xFF), UInt8((offset >> 8) & 0xFF), UInt8(offset & 0xFF)])
             data.append(contentsOf: kus)
-            _ = try await posli(modul: FunDoCommand.souborModul, typ: FunDoCommand.souborTyp, cmd: FunDoCommand.souborBlok,
-                                 data: data, timeoutS: 15.0)
-            off = konec
             n += 1
+            do {
+                _ = try await posli(modul: FunDoCommand.souborModul, typ: FunDoCommand.souborTyp, cmd: FunDoCommand.souborBlok,
+                                     data: data, timeoutS: 15.0)
+                Log.sdilene.zapis(.info, "blok \(n)/\(pocetBloku) potvrzen · offset \(off) · \(kus.count) B")
+            } catch {
+                Log.sdilene.zapis(.chyba, "blok \(n)/\(pocetBloku) selhal · offset \(off) · \(error.localizedDescription)")
+                throw error
+            }
+            off = konec
             await progress?(Double(off) / Double(soubor.count), "blok \(n) · \(off)/\(soubor.count)")
         }
         _ = try await posli(modul: FunDoCommand.souborModul, typ: FunDoCommand.souborTyp, cmd: FunDoCommand.souborZakonceni, data: [0x00])
+        Log.sdilene.zapis(.info, "přenos souboru: hotovo (\(n) bloků)")
         await progress?(1, "hotovo")
     }
 
@@ -229,6 +273,7 @@ final class BLEManager: NSObject, ObservableObject {
 extension BLEManager: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor in
+            Log.sdilene.zapis(.info, "BLE stav: \(Self.popisStavuBluetooth(central.state))")
             if central.state == .poweredOn {
                 self.pripojSeUlozenym()
             }
@@ -239,26 +284,37 @@ extension BLEManager: CBCentralManagerDelegate {
         // Systém obnovuje appku na pozadí kvůli BLE — jen zalogovat, connect
         // dojede přes centralManager(_:didConnect:) / didFailToConnect.
         log.debug("BLE state restoration")
+        Task { @MainActor in Log.sdilene.zapis(.info, "BLE state restoration — appka probuzená na pozadí") }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                      advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        Task { @MainActor in self.pripojK(peripheral) }
+        Task { @MainActor in
+            Log.sdilene.zapis(.info, "nalezeno: \(peripheral.name ?? peripheral.identifier.uuidString) · RSSI \(RSSI)")
+            self.pripojK(peripheral)
+        }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
+            Log.sdilene.zapis(.info, "BLE připojeno: \(peripheral.name ?? peripheral.identifier.uuidString), zjišťuji služby…")
             UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: Self.ulozenyIdentifierKlic)
             peripheral.discoverServices([Self.sluzbaUUID])
         }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        Task { @MainActor in self.stav = .chyba(error?.localizedDescription ?? "připojení selhalo") }
+        Task { @MainActor in
+            let popis = error?.localizedDescription ?? "připojení selhalo"
+            Log.sdilene.zapis(.chyba, "připojení selhalo: \(popis)")
+            self.stav = .chyba(popis)
+        }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor in
+            let duvod = error?.localizedDescription ?? "běžné odpojení, bez chyby"
+            Log.sdilene.zapis(error == nil ? .info : .chyba, "odpojeno: \(duvod)")
             self.stav = .odpojeno
             self.zapisChar = nil
             self.notifyChar = nil
@@ -269,20 +325,42 @@ extension BLEManager: CBCentralManagerDelegate {
             self.cekajici.removeAll()
         }
     }
+
+    private static func popisStavuBluetooth(_ s: CBManagerState) -> String {
+        switch s {
+        case .poweredOn: return "zapnutý"
+        case .poweredOff: return "vypnutý"
+        case .resetting: return "resetuje se"
+        case .unauthorized: return "neautorizováno"
+        case .unsupported: return "nepodporováno"
+        case .unknown: return "neznámý"
+        @unknown default: return "neznámý (\(s.rawValue))"
+        }
+    }
 }
 
 // MARK: - CBPeripheralDelegate
 
 extension BLEManager: CBPeripheralDelegate {
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let services = peripheral.services else { return }
+        guard let services = peripheral.services else {
+            if let error {
+                Task { @MainActor in Log.sdilene.zapis(.chyba, "zjišťování služeb selhalo: \(error.localizedDescription)") }
+            }
+            return
+        }
         for s in services where s.uuid == Self.sluzbaUUID {
             peripheral.discoverCharacteristics([Self.zapisUUID, Self.notifyUUID], for: s)
         }
     }
 
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard let chars = service.characteristics else { return }
+        guard let chars = service.characteristics else {
+            if let error {
+                Task { @MainActor in Log.sdilene.zapis(.chyba, "zjišťování charakteristik selhalo: \(error.localizedDescription)") }
+            }
+            return
+        }
         Task { @MainActor in
             for c in chars {
                 if c.uuid == Self.zapisUUID { self.zapisChar = c }
@@ -292,6 +370,7 @@ extension BLEManager: CBPeripheralDelegate {
                 }
             }
             if self.zapisChar != nil {
+                Log.sdilene.zapis(.info, "charakteristiky nalezeny, notify zapnuto — připojeno")
                 self.stav = .pripojeno(nazev: peripheral.name ?? "hodinky")
             }
         }
@@ -303,15 +382,19 @@ extension BLEManager: CBPeripheralDelegate {
         Task { @MainActor in
             self.posledniNotifikace = Date()
             self.naNotifikaci?()
+            Log.sdilene.zapis(.prijato, bytes.hexPopis)
             switch FunDoFrame.decode(bytes) {
             case .success(let frame):
                 if let (cont, timeoutTask) = self.cekajici.removeValue(forKey: frame.seq) {
                     timeoutTask.cancel()
+                    Log.sdilene.zapis(.info, "seq \(frame.seq) sedí · \(Self.popisPrikazu(modul: frame.body.modul, typ: frame.body.typ, cmd: frame.body.cmd))")
                     cont.resume(returning: frame.body)
                 } else {
+                    Log.sdilene.zapis(.info, "seq \(frame.seq) nesedí žádnému čekajícímu požadavku (nepárovaný rámec)")
                     self.naNeparovanyRamec?(frame)
                 }
             case .failure(let err):
+                Log.sdilene.zapis(.chyba, "nerozpoznaný rámec z hodinek: \(String(describing: err))")
                 self.log.debug("nerozpoznaný rámec z hodinek: \(String(describing: err))")
             }
         }

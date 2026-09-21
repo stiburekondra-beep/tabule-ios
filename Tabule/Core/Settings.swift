@@ -14,6 +14,7 @@ final class Nastaveni: ObservableObject {
         static let cockpitURL = "cockpitURL"
         static let setrit = "rezimSetrit"
         static let posledniSlot = "posledniNahranySlotCiferniku"
+        static let logServerURL = "logServerURL"
     }
 
     @Published var hubURL: String {
@@ -48,6 +49,14 @@ final class Nastaveni: ObservableObject {
         didSet { UserDefaults.standard.set(posledniNahranySlot, forKey: Klic.posledniSlot) }
     }
 
+    /// URL diagnostického log serveru (`ios/logserver/log_server.py`, běží
+    /// na Hubu) — `LogUploader` sem POSTuje nové záznamy z `Log.sdilene`
+    /// každých ~5 s. Výchozí prázdné = appka log nikam neposílá (jen ho
+    /// drží lokálně v appce). Viz F18 připomínka o logu.
+    @Published var logServerURL: String {
+        didSet { UserDefaults.standard.set(logServerURL, forKey: Klic.logServerURL) }
+    }
+
     private init() {
         let d = UserDefaults.standard
         hubURL = d.string(forKey: Klic.hubURL) ?? ""
@@ -55,5 +64,6 @@ final class Nastaveni: ObservableObject {
         cockpitURL = d.string(forKey: Klic.cockpitURL) ?? ""
         setrit = d.bool(forKey: Klic.setrit)
         posledniNahranySlot = d.object(forKey: Klic.posledniSlot) != nil ? d.integer(forKey: Klic.posledniSlot) : -1
+        logServerURL = d.string(forKey: Klic.logServerURL) ?? ""
     }
 }

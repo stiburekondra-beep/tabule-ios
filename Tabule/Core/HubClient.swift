@@ -26,10 +26,14 @@ struct HubClient {
     /// Vrací pole sessions přes pole `title`, `summary`, `status`, `waiting`.
     func nactiSessions() async throws -> [TabuleSession] {
         guard var comps = URLComponents(string: baseURL.trimmingCharacters(in: .init(charactersIn: "/"))) else {
+            await Log.sdilene.zapis(.chyba, "GET /api/sessions: neplatná URL Hubu (\(baseURL))")
             throw Chyba.spatnaURL
         }
         comps.path += "/api/sessions"
-        guard let url = comps.url else { throw Chyba.spatnaURL }
+        guard let url = comps.url else {
+            await Log.sdilene.zapis(.chyba, "GET /api/sessions: neplatná URL Hubu")
+            throw Chyba.spatnaURL
+        }
         var req = URLRequest(url: url, timeoutInterval: 8)
         if !token.isEmpty {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -38,12 +42,15 @@ struct HubClient {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let kod = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                await Log.sdilene.zapis(.chyba, "GET \(url.absoluteString) → HTTP \(kod)")
                 throw Chyba.httpChyba(kod)
             }
+            await Log.sdilene.zapis(.info, "GET \(url.absoluteString) → HTTP \(http.statusCode)")
             return try JSONDecoder().decode([TabuleSession].self, from: data)
         } catch let e as Chyba {
             throw e
         } catch {
+            await Log.sdilene.zapis(.chyba, "GET \(url.absoluteString) → chyba: \(error.localizedDescription)")
             throw Chyba.bezSpojeni(error)
         }
     }
@@ -61,6 +68,7 @@ struct HubClient {
     /// sekundách — rádio (Wi-Fi/mobil) mezi tím spí.
     func dlouhyPoll(machine: String, waitS: Double) async throws {
         guard var comps = URLComponents(string: baseURL.trimmingCharacters(in: .init(charactersIn: "/"))) else {
+            await Log.sdilene.zapis(.chyba, "GET /api/poll: neplatná URL Hubu (\(baseURL))")
             throw Chyba.spatnaURL
         }
         comps.path += "/api/poll"
@@ -68,21 +76,28 @@ struct HubClient {
             URLQueryItem(name: "machine", value: machine),
             URLQueryItem(name: "wait", value: String(Int(waitS))),
         ]
-        guard let url = comps.url else { throw Chyba.spatnaURL }
+        guard let url = comps.url else {
+            await Log.sdilene.zapis(.chyba, "GET /api/poll: neplatná URL Hubu")
+            throw Chyba.spatnaURL
+        }
         // Timeout požadavku musí být delší než `wait`, ať ho neuřízne dřív než Hub.
         var req = URLRequest(url: url, timeoutInterval: waitS + 15)
         if !token.isEmpty {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        await Log.sdilene.zapis(.info, "GET \(url.absoluteString) (dlouhý poll, čekám až \(Int(waitS)) s)…")
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let kod = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                await Log.sdilene.zapis(.chyba, "GET \(url.absoluteString) → HTTP \(kod)")
                 throw Chyba.httpChyba(kod)
             }
+            await Log.sdilene.zapis(.info, "dlouhý poll: odpověď/timeout Hubu (HTTP \(http.statusCode))")
         } catch let e as Chyba {
             throw e
         } catch {
+            await Log.sdilene.zapis(.chyba, "GET \(url.absoluteString) → chyba: \(error.localizedDescription)")
             throw Chyba.bezSpojeni(error)
         }
     }
@@ -100,10 +115,14 @@ struct HubClient {
     @discardableResult
     func posliSmer(text: String) async throws -> Data {
         guard var comps = URLComponents(string: baseURL.trimmingCharacters(in: .init(charactersIn: "/"))) else {
+            await Log.sdilene.zapis(.chyba, "POST /api/smer: neplatná URL Hubu (\(baseURL))")
             throw Chyba.spatnaURL
         }
         comps.path += "/api/smer"
-        guard let url = comps.url else { throw Chyba.spatnaURL }
+        guard let url = comps.url else {
+            await Log.sdilene.zapis(.chyba, "POST /api/smer: neplatná URL Hubu")
+            throw Chyba.spatnaURL
+        }
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -112,16 +131,20 @@ struct HubClient {
         }
         let telo: [String: String] = ["text": text, "zdroj": "hodinky"]
         req.httpBody = try JSONSerialization.data(withJSONObject: telo)
+        await Log.sdilene.zapis(.odeslano, "POST \(url.absoluteString) · text=\(text)")
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 let kod = (resp as? HTTPURLResponse)?.statusCode ?? -1
+                await Log.sdilene.zapis(.chyba, "POST \(url.absoluteString) → HTTP \(kod)")
                 throw Chyba.httpChyba(kod)
             }
+            await Log.sdilene.zapis(.prijato, "POST \(url.absoluteString) → HTTP \(http.statusCode)")
             return data
         } catch let e as Chyba {
             throw e
         } catch {
+            await Log.sdilene.zapis(.chyba, "POST \(url.absoluteString) → chyba: \(error.localizedDescription)")
             throw Chyba.bezSpojeni(error)
         }
     }

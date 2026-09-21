@@ -22,6 +22,7 @@ struct TabuleApp: App {
         let b = BLEManager()
         _ble = StateObject(wrappedValue: b)
         _sluzba = StateObject(wrappedValue: TabuleService(ble: b))
+        LogUploader.sdileny.spustSmycku() // periodické odesílání logu na Log server, viz Nastavení
     }
 
     var body: some Scene {

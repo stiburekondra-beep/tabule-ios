@@ -58,10 +58,12 @@ final class TabuleService: ObservableObject {
     /// Viz README „Baterie a dva režimy" (odhad spotřeby, neměřeno).
     func aktualizujRezim() {
         if Nastaveni.shared.setrit {
+            Log.sdilene.zapis(.info, "režim: Šetřit — vypínám MPRemoteCommandCenter a dlouhý poll")
             NowPlayingController.shared.zastav()
             dlouhyPollTask?.cancel()
             dlouhyPollTask = nil
         } else {
+            Log.sdilene.zapis(.info, "režim: Normální — zapínám MPRemoteCommandCenter a dlouhý poll")
             NowPlayingController.shared.nastavSePriStartu()
             guard dlouhyPollTask == nil else { return }
             dlouhyPollTask = Task { [weak self] in
@@ -137,6 +139,7 @@ final class TabuleService: ObservableObject {
         let n = Nastaveni.shared
         guard !n.hubURL.isEmpty else {
             posledniChyba = "Hub není nastavený"
+            Log.sdilene.zapis(.chyba, "nacistZHubuAPoslat: Hub není nastavený")
             await poslatTabuli(.bezSpojeniStav)
             return
         }
@@ -155,6 +158,7 @@ final class TabuleService: ObservableObject {
         probihaPrenos = true
         prubeh = 0
         prubehText = "\(popis): připravuji šablonu…"
+        Log.sdilene.zapis(.info, "\(popis): start")
         defer { probihaPrenos = false }
         do {
             let sablona = try DialFile.nactiSablonu()
@@ -170,6 +174,7 @@ final class TabuleService: ObservableObject {
                 self?.prubehText = text
             }
             posledniChyba = nil
+            Log.sdilene.zapis(.info, "\(popis): hotovo, přepínám na slot \(cil)")
             do {
                 try await ble.prepniCifernik(dialId: cil)
                 Nastaveni.shared.posledniNahranySlot = Int(cil)
@@ -177,9 +182,11 @@ final class TabuleService: ObservableObject {
                 // Nefatální — "přepni ciferník" je odhad, hodinky ho možná
                 // neznají nebo mlčí. Obrázek už je nahraný, jen se možná
                 // nezobrazil samo (viz README).
+                Log.sdilene.zapis(.chyba, "\(popis): přepnutí ciferníku selhalo (nefatální): \(error.localizedDescription)")
             }
         } catch {
             posledniChyba = error.localizedDescription
+            Log.sdilene.zapis(.chyba, "\(popis): selhalo — \(error.localizedDescription)")
         }
     }
 
@@ -201,6 +208,7 @@ final class TabuleService: ObservableObject {
     /// Zavolá NowPlayingController po stisku play/pause/next/previous.
     /// Pošle POST na Hub `/api/smer` a předá akci dál (WebBridge → cockpit).
     func zpracujStiskTlacitka(_ akce: String) {
+        Log.sdilene.zapis(.info, "zpracovávám stisk: \(akce)")
         naStiskTlacitka?(akce)
         let n = Nastaveni.shared
         guard !n.hubURL.isEmpty else { return }
@@ -219,6 +227,7 @@ final class TabuleService: ObservableObject {
         let ted = Date()
         guard ted.timeIntervalSince(posledniKontrolaHubu) >= minIntervalKontrolyS else { return }
         posledniKontrolaHubu = ted
+        Log.sdilene.zapis(.info, "probuzení z BLE notify — kontroluji Hub")
         Task { await zkontrolujHubAPripadneOznam() }
     }
 
@@ -231,6 +240,7 @@ final class TabuleService: ObservableObject {
         let noveCekajici = !cekajiciNazvy.subtracting(znameCekajiciNazvy).isEmpty
         znameCekajiciNazvy = cekajiciNazvy
         guard noveCekajici else { return }
+        Log.sdilene.zapis(.info, "nová čekající session — přegeneruji tabuli a zavibruju")
         await poslatTabuli(TabuleObsah(bezSpojeni: false, sessions: sessions))
         try? await ble.vibrace()
     }

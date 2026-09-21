@@ -13,10 +13,17 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             if !nastaveni.cockpitURL.isEmpty && chybaNacteni == nil {
-                WebViewContainer(urlString: nastaveni.cockpitURL, sluzba: sluzba) { chyba in
-                    chybaNacteni = chyba
+                // Cockpit je bonus, ne nutnost — nenačte se, appka spadne
+                // zpátky na NouzovaObrazovka (viz else větev), nic tu
+                // neblokuje. Log dole je vlastní panel nad WKWebView, ať
+                // je vidět i tady, ne jen na nouzové obrazovce (F18).
+                VStack(spacing: 0) {
+                    WebViewContainer(urlString: nastaveni.cockpitURL, sluzba: sluzba) { chyba in
+                        chybaNacteni = chyba
+                    }
+                    LogView()
                 }
-                .ignoresSafeArea()
+                .ignoresSafeArea(edges: .top)
             } else {
                 NouzovaObrazovka(duvod: chybaNacteni) { chybaNacteni = nil }
             }

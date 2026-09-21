@@ -130,6 +130,7 @@ final class NowPlayingController {
     private func nastavJinouHudbu(_ hraje: Bool) {
         guard hraje != jinaHudbaHraje else { return }
         jinaHudbaHraje = hraje
+        Log.sdilene.zapis(.info, hraje ? "jiná appka převzala AVRCP (hraje jiná hudba)" : "AVRCP zpátky u nás")
         naZmenuJinehoZvuku?(hraje)
     }
 
@@ -209,6 +210,7 @@ final class NowPlayingController {
     }
 
     private func stisk(_ akce: String) {
+        Log.sdilene.zapis(.info, "stisk tlačítka z přehrávače: \(akce)")
         naStisk?(akce)
     }
 }

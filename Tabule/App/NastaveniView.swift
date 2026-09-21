@@ -41,6 +41,14 @@ struct NastaveniView: View {
                     Text("Používá se pro GET /api/sessions a POST /api/smer (Authorization: Bearer <token>).")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("Log server") {
+                    TextField("http://…:8899/log (prázdné = neposílat)", text: $nastaveni.logServerURL)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Text("Appka sem posílá diagnostický log (BLE, rámce, HTTP, chyby) každých ~5 s, ať ho jde sledovat i na notebooku — viz ios/logserver/log_server.py. Log v appce (dole na hlavní i nouzové obrazovce) funguje vždy, bez ohledu na tohle pole.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Nastavení")
             .toolbar {

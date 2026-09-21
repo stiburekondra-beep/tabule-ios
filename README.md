@@ -61,8 +61,38 @@ cockpitu**:
 | probouzení z notify (max 1×/20 s dotaz na Hub) | `Core/TabuleService.swift` | **neověřeno na hardwaru** |
 | WebView + JS most | `App/WebViewContainer.swift`, `Core/WebBridge.swift` | — |
 | nouzová obrazovka + nastavení | `App/NouzovaObrazovka.swift`, `App/NastaveniView.swift` | — |
+| diagnostický log (kruhový buffer 500, UI panel, upload na server) | `Core/Log.swift`, `Core/LogUploader.swift`, `App/LogView.swift` | přidáno po F18 (Ondrova připomínka „proč tam nemáš nějaký log"), **neověřeno na hardwaru** |
+| log server (Python, stdlib) | `logserver/log_server.py` | běží na Hubu, appka na něj POSTuje, viz `logserver/README.md` |
 | XcodeGen projekt | `project.yml` | negenerováno lokálně (Mac tu není) |
 | CI (test + archiv + .ipa) | `.github/workflows/build-ios.yml` | **nespuštěno** — zatím jen v `ios/`, ne v kořeni repa |
+
+## Diagnostický log
+
+Appka drží kruhový buffer posledních **500** záznamů (`Core/Log.swift`,
+`Log.sdilene`, `@MainActor` singleton) — čas, úroveň (`info` / `odeslano` /
+`prijato` / `chyba`) a text. Loguje se skoro všechno: stav BLE (zapnutý/
+vypnutý, sken, nalezeno, připojeno/odpojeno + důvod), **každý odeslaný
+rámec v hexu i s popisem** (`seq 8193 · vibrace · ba 21 00 05 …`), **každá
+přijatá odpověď v hexu**, párování podle seq (sedí/nesedí/timeout), průběh
+přenosu souboru (číslo bloku, offset, potvrzeno/timeout), HTTP dotazy na
+Hub (URL, status, chyba), chyby WebView (i URL, na kterou se sahalo — i
+klasický `-999` z F18), stisky tlačítek z přehrávače a změny režimu
+(Normální/Šetřit).
+
+**V appce**: rolovací sekce „Log" dole na hlavní i nouzové obrazovce
+(`App/LogView.swift`) — sbalená ukazuje jen počet záznamů, rozbalená
+monospace/malé písmo, nejnovější dole, auto-scroll, tlačítka Kopírovat
+a Odeslat na server.
+
+**Na notebooku**: `Core/LogUploader.swift` posílá dávkově (~5 s, nebo hned
+při chybě) nové záznamy na URL z Nastavení („Log server" — prázdné =
+neposílat) na `ios/logserver/log_server.py` (jen stdlib, běží na Hubu,
+`POST /log`, `GET /log?n=200`, auto-refreshující `GET /`). Selhání
+uploadu je tiché — appka nic nehlásí, jen to zkusí znovu příště. Viz
+`logserver/README.md`.
+
+Vzniklo po F18 (appka poprvé na telefonu, 21.–22. 9. 2026) — Ondrova
+připomínka: *„proč tam nemáš nějaký log, ať to vidíš"*.
 
 ## Baterie a dva režimy
 
