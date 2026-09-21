@@ -1,0 +1,90 @@
+name: Tabule
+options:
+  bundleIdPrefix: cz.baklazan
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  developmentLanguage: cs
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGN_IDENTITY: ""
+    DEVELOPMENT_TEAM: ""
+    ENABLE_BITCODE: NO
+
+targets:
+  Tabule:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tabule
+    info:
+      path: Generated/Tabule-Info.plist
+      properties:
+        CFBundleDisplayName: "Tabule"
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIBackgroundModes:
+          - bluetooth-central
+          - audio
+        NSBluetoothAlwaysUsageDescription: >-
+          Tabule na zápěstí se připojuje k hodinkám Niceboy Watch 5 Lite
+          přes Bluetooth, aby jim poslala tabuli se stavem a přijala
+          stisky tlačítek — i na pozadí.
+        NSBluetoothPeripheralUsageDescription: >-
+          Tabule na zápěstí se připojuje k hodinkám Niceboy Watch 5 Lite
+          přes Bluetooth.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cz.baklazan.tabule
+        PRODUCT_NAME: Tabule
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO
+    resources:
+      - path: Tabule/Resources
+
+  TabuleTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: TabuleTests
+    resources:
+      - path: Tabule/Resources
+    dependencies:
+      - target: Tabule
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cz.baklazan.tabuleTests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Tabule:
+    build:
+      targets:
+        Tabule: all
+        TabuleTests: [test]
+    test:
+      config: Debug
+      targets:
+        - TabuleTests
+    run:
+      config: Debug
+    archive:
+      config: Release
