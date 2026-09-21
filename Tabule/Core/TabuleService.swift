@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Centrální logika appky — spojuje BLE, vykreslení tabule, přenos souboru
 /// a dotazy na Hub. Používá ji jak nouzová SwiftUI obrazovka, tak
@@ -123,6 +126,86 @@ final class TabuleService: ObservableObject {
 
     func poslatZelenou() async {
         await odeslatObraz(RGB565.plna(RGB565.zelena, pocetBodu: DialGeometry.sirka * DialGeometry.vyska), popis: "zkouška: zelená")
+    }
+
+    #if canImport(UIKit)
+    /// Pošle libovolný obrázek z fotek jako ciferník — ořízne na výplň
+    /// (aspect-fill, střed) na rozměr tabule (240×286).
+    func poslatObrazek(_ image: UIImage) async {
+        await odeslatObraz(RGB565.zObrazku(image), popis: "obrázek z fotek")
+    }
+    #endif
+
+    // MARK: - Displej, ikona v menu, čas — OVĚŘENO na hodinkách (F10)
+
+    /// Rozsvítí displej. **Ověřeno** (F10), ale podle stejného pozorování
+    /// spojení po odeslání spadne — appka to bere jako očekávaný vedlejší
+    /// účinek, ne jako chybu (BLEManager se sám znovu připojí).
+    func rozsvitDisplej() async {
+        do {
+            _ = try await ble.rozsvitDisplej()
+            posledniChyba = nil
+        } catch {
+            posledniChyba = nil
+            Log.sdilene.zapis(.info, "rozsvícení displeje: odesláno, spojení podle F10 očekávaně spadlo (\(error.localizedDescription))")
+        }
+    }
+
+    /// Zapne/vypne ikonu appky v menu hodinek. **Ověřeno** (F10).
+    func nastavIkonuVMenu(zapnuto: Bool) async {
+        do {
+            _ = try await ble.nastavIkonuVMenu(zapnuto: zapnuto)
+            posledniChyba = nil
+        } catch {
+            posledniChyba = error.localizedDescription
+        }
+    }
+
+    /// Nastaví čas na hodinkách na aktuální (nebo dodaný) čas telefonu.
+    func nastavCas(_ datum: Date = Date()) async {
+        do {
+            _ = try await ble.nastavCas(datum)
+            posledniChyba = nil
+        } catch {
+            posledniChyba = error.localizedDescription
+        }
+    }
+
+    // MARK: - Volný rámec (ladění bez nového buildu)
+
+    /// Pošle libovolný rámec podle hex textů zadaných v UI. Vrací syrovou
+    /// hex odpověď (nebo popis chyby) k zobrazení — šetří to buildy při
+    /// zkoušení neznámých příkazů.
+    func odeslatVolnyRamec(modulHex: String, typHex: String, cmdHex: String, dataHex: String) async -> String {
+        guard let modul = Self.parsujHexBajt(modulHex),
+              let typ = Self.parsujHexBajt(typHex),
+              let cmd = Self.parsujHexBajt(cmdHex) else {
+            return "chyba: modul/typ/cmd musí být hex bajt (např. 04)"
+        }
+        guard let data = Self.parsujHexData(dataHex) else {
+            return "chyba: data musí být hex bajty oddělené mezerou (např. 01 02 0a), nebo prázdné"
+        }
+        do {
+            let odp = try await ble.posliVolnyRamec(modul: modul, typ: typ, cmd: cmd, data: data)
+            return odp.data.isEmpty ? "(prázdná odpověď, bez dat)" : odp.data.hexPopis
+        } catch {
+            return "chyba: \(error.localizedDescription)"
+        }
+    }
+
+    private static func parsujHexBajt(_ s: String) -> UInt8? {
+        UInt8(s.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "0x", with: ""), radix: 16)
+    }
+
+    private static func parsujHexData(_ s: String) -> [UInt8]? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return [] }
+        var out: [UInt8] = []
+        for cast in trimmed.split(whereSeparator: { $0 == " " || $0 == "," }) {
+            guard let b = UInt8(cast, radix: 16) else { return nil }
+            out.append(b)
+        }
+        return out
     }
 
     /// Vykreslí a odešle tabuli podle dodaného obsahu (buď z Hubu, nebo

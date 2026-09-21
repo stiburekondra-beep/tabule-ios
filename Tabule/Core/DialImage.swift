@@ -1,5 +1,8 @@
 import CoreGraphics
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Rozměry tabule (F7-format-obrazku.md).
 enum DialGeometry {
@@ -40,6 +43,38 @@ enum RGB565 {
     }
 
     static let zelena: UInt16 = 0x07E0
+
+    #if canImport(UIKit)
+    /// Převede libovolný `UIImage` (např. z fotek) na RGB565 BE bajty
+    /// tabule (240×286) — ořízne na výplň (aspect-fill), vystředěné.
+    /// Stejné vykreslovací parametry jako `DialRenderer` (RGBA8888,
+    /// premultipliedLast), ať jde bajty rovnou přes `zeRGBA`.
+    static func zObrazku(_ image: UIImage) -> [UInt8] {
+        let w = DialGeometry.sirka, h = DialGeometry.vyska
+        let pocetBodu = w * h
+        guard let cgImage = image.cgImage else {
+            return plna(0, pocetBodu: pocetBodu) // černá — obrázek se nepodařilo přečíst
+        }
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var buffer = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(
+            data: &buffer, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+            space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return plna(0, pocetBodu: pocetBodu)
+        }
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+        let imgW = CGFloat(cgImage.width), imgH = CGFloat(cgImage.height)
+        guard imgW > 0, imgH > 0 else { return plna(0, pocetBodu: pocetBodu) }
+        let meritko = max(CGFloat(w) / imgW, CGFloat(h) / imgH)
+        let kresliW = imgW * meritko, kresliH = imgH * meritko
+        let x = (CGFloat(w) - kresliW) / 2
+        let y = (CGFloat(h) - kresliH) / 2
+        ctx.draw(cgImage, in: CGRect(x: x, y: y, width: kresliW, height: kresliH))
+        return zeRGBA(buffer)
+    }
+    #endif
 }
 
 /// Sestavení souboru ciferníku ze šablony — 1:1 podle `web/tabule.html`

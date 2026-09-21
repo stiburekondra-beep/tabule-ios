@@ -72,12 +72,36 @@ struct NouzovaObrazovka: View {
                 }
                 .frame(maxWidth: .infinity)
 
+                if !sluzba.ble.nalezenaZarizeni.isEmpty {
+                    zarizeniPanel
+                }
+
                 slotyPanel
 
                 LogView()
             }
             .padding()
         }
+    }
+
+    /// Ruční výběr, když se sken (bez filtru na službu, viz
+    /// `BLEManager.zahajSken`) netrefil automaticky podle jména/ID —
+    /// „Připojit hodinky" dřív jen problikl, protože appka skenovala
+    /// s filtrem na vlastní service UUID, kterou hodinky v reklamě možná
+    /// neinzerují.
+    private var zarizeniPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Nalezená zařízení").font(.footnote).bold()
+            ForEach(sluzba.ble.nalezenaZarizeni) { z in
+                Button("\(z.nazev) · RSSI \(z.rssi)") { sluzba.ble.pripojKRucne(z) }
+                    .buttonStyle(.bordered)
+                    .font(.footnote)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     /// Ladicí panel pro dva sloty ciferníku — vše ⚠️ NEOVĚŘENO (viz README
@@ -130,7 +154,7 @@ struct NouzovaObrazovka: View {
     private var popisStavu: String {
         switch sluzba.ble.stav {
         case .odpojeno: return "odpojeno"
-        case .hledam: return "hledám hodinky…"
+        case .hledam: return "hledám hodinky… (\(sluzba.ble.nalezenaZarizeni.count) nalezeno)"
         case .pripojuji: return "připojuji…"
         case .pripojeno(let nazev): return "připojeno: \(nazev)"
         case .chyba(let z): return "chyba: \(z)"

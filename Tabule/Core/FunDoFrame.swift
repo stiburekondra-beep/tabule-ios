@@ -144,4 +144,29 @@ enum FunDoCommand {
     /// na hodinkách, appka posílá 1 bajt a chybu (žádnou odpověď/timeout)
     /// ošetřuje jako nefatální.
     static let ciferníkPrepnoutCmd: UInt8 = 0x4F // 79
+
+    // MARK: - Displej, ikona v menu, čas — OVĚŘENO na hodinkách (F10)
+
+    /// modul 0x04, typ 0x01, cmd 0x42, data `01` — rozsvítí displej.
+    /// **Ověřeno** (F10: „hned u 1 blikla obrazovka"). ⚠️ Podle stejného
+    /// pozorování **shodí BLE spojení** — appka to počítá jako očekávané
+    /// (`BLEManager` se po odpojení sám pokusí znovu připojit).
+    static let displejModul: UInt8 = 0x04
+    static let displejTyp: UInt8 = 0x01
+    static let displejCmd: UInt8 = 0x42
+
+    /// modul 0x04, typ 0x01, cmd 0x46, data `01`/`00` — ikona appky
+    /// v menu hodinek zap/vyp. **Ověřeno** (F10: „vidím ikonu kamery").
+    static let ikonaMenuModul: UInt8 = 0x04
+    static let ikonaMenuTyp: UInt8 = 0x01
+    static let ikonaMenuCmd: UInt8 = 0x46
+
+    /// modul 0x02, typ 0x01, cmd 0x20, data `[rok-2000, měsíc, den,
+    /// hodina, minuta, sekunda, 0]` — nastavit čas. **Neověřeno přímo**
+    /// (F10 ho zmiňuje jako součást úvodní sekvence oficiální appky, ale
+    /// samostatně nezkoušeno) — bezpečný pokus, žádné vedlejší účinky
+    /// pozorované u ostatních `0x02` příkazů.
+    static let casModul: UInt8 = 0x02
+    static let casTyp: UInt8 = 0x01
+    static let casCmd: UInt8 = 0x20
 }

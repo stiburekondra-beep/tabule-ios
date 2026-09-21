@@ -26,9 +26,26 @@ final class BLEManager: NSObject, ObservableObject {
         case chyba(String)
     }
 
+    /// Zařízení nalezené při skenování bez filtru na službu (viz
+    /// `zahajSken`) — appka to nabídne k ručnímu výběru, když se
+    /// automatické rozpoznání podle jména/uloženého ID netrefí.
+    struct NalezenePeripheral: Identifiable {
+        var id: UUID { peripheral.identifier }
+        let peripheral: CBPeripheral
+        let rssi: Int
+        var nazev: String { peripheral.name ?? peripheral.identifier.uuidString }
+    }
+
     @Published private(set) var stav: Stav = .odpojeno
     @Published private(set) var bateriePct: Int?
     @Published private(set) var posledniNotifikace: Date?
+    /// Zařízení nalezená během posledního skenování (bez filtru na
+    /// službu) — appka se poprvé pokoušela skenovat JEN s filtrem na
+    /// `sluzbaUUID`, ale hodinky ho možná v reklamě neinzerují (běžné
+    /// u 128bit custom služeb), takže se nikdy nic nenašlo a tlačítko
+    /// „Připojit" jen „problikne". Teď appka skenuje bez filtru a nabídne
+    /// seznam k ručnímu výběru, kdyby se auto-match podle jména/ID nepovedl.
+    @Published private(set) var nalezenaZarizeni: [NalezenePeripheral] = []
 
     /// Zavolá se při jakékoli notifikaci z hodinek — appka to použije jako
     /// „budíček" k dotazu na Hub (F17 doplněk, bod 7 zadání). Volá se na
@@ -47,10 +64,21 @@ final class BLEManager: NSObject, ObservableObject {
     private var seq: UInt16 = 0x2000
     private var cekajici: [UInt16: (CheckedContinuation<FunDoBody, Error>, Task<Void, Never>)] = [:]
     private let log = Logger(subsystem: "cz.baklazan.tabule", category: "BLE")
+    /// `true`, když appka chtěla hledat (`hledejAPripoj()`), ale Bluetooth
+    /// ještě nebyl `.poweredOn` — sken se spustí sám, jakmile
+    /// `centralManagerDidUpdateState` nahlásí zapnutí (fronta „naskenuj,
+    /// až bude zapnuto", viz Ondrova připomínka o problikávajícím tlačítku).
+    private var chceHledat = false
+    /// Vzor ve jméně zařízení pro automatické rozpoznání hodinek při
+    /// skenu bez filtru na službu — case-insensitive.
+    private static let jmenoVzor = "watch 5 lite"
 
     override init() {
         super.init()
-        let opts: [String: Any] = [CBCentralManagerOptionRestoreIdentifierKey: Self.restoreID]
+        let opts: [String: Any] = [
+            CBCentralManagerOptionRestoreIdentifierKey: Self.restoreID,
+            CBCentralManagerOptionShowPowerAlertKey: true,
+        ]
         central = CBCentralManager(delegate: self, queue: nil, options: opts)
     }
 
@@ -67,30 +95,59 @@ final class BLEManager: NSObject, ObservableObject {
         }
     }
 
+    /// Zahájí hledání — pokud Bluetooth ještě není zapnutý, jen si to
+    /// zapamatuje a spustí sken, jakmile `centralManagerDidUpdateState`
+    /// nahlásí `.poweredOn` (dřív appka jen jednorázově zkontrolovala
+    /// stav a tiše skončila — proto tlačítko "jen probliklo").
     func hledejAPripoj() {
         guard central.state == .poweredOn else {
-            stav = .chyba("Bluetooth není zapnutý")
-            Log.sdilene.zapis(.chyba, "hledejAPripoj: Bluetooth není zapnutý")
+            chceHledat = true
+            stav = .chyba("čekám na zapnutí Bluetooth (\(Self.popisStavuBluetooth(central.state)))")
+            Log.sdilene.zapis(.info, "hledejAPripoj: BT stav \(Self.popisStavuBluetooth(central.state)), naplánováno na zapnutí")
             return
         }
+        zahajSken()
+    }
+
+    /// Skenuje **bez filtru na service UUID** — hodinky ho v reklamních
+    /// datech možná neinzerují (běžné u vlastních 128bit služeb, appka
+    /// se filtrem na `sluzbaUUID` dřív nikdy nic nenašla). Automaticky se
+    /// připojí, když jméno zařízení obsahuje „watch 5 lite" nebo sedí
+    /// uložený identifikátor; ostatní nalezená zařízení jde připojit
+    /// ručně přes `nalezenaZarizeni` (UI seznam).
+    private func zahajSken() {
+        chceHledat = false
         stav = .hledam
-        Log.sdilene.zapis(.info, "skenování hodinek…")
+        nalezenaZarizeni = []
+        Log.sdilene.zapis(.info, "skenování hodinek (bez filtru na službu)…")
         let jizPripojene = central.retrieveConnectedPeripherals(withServices: [Self.sluzbaUUID])
         if let p = jizPripojene.first {
             Log.sdilene.zapis(.info, "hodinky už připojené systémem: \(p.name ?? p.identifier.uuidString)")
             pripojK(p)
             return
         }
-        central.scanForPeripherals(withServices: [Self.sluzbaUUID], options: nil)
+        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         // Bezpečnostní timeout skenu — nezůstat viset v „hledám" navěky.
         Task {
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             if case .hledam = stav {
                 central.stopScan()
-                stav = .chyba("hodinky se nenašly")
-                Log.sdilene.zapis(.chyba, "sken vypršel (15 s) — hodinky se nenašly")
+                if nalezenaZarizeni.isEmpty {
+                    stav = .chyba("hodinky se nenašly")
+                    Log.sdilene.zapis(.chyba, "sken vypršel (15 s) — nic v okolí")
+                } else {
+                    stav = .chyba("automaticky nerozpoznáno — vyber ze seznamu níž")
+                    Log.sdilene.zapis(.chyba, "sken vypršel (15 s) — \(nalezenaZarizeni.count) zařízení nalezeno, žádné nesedí jménu/ID")
+                }
             }
         }
+    }
+
+    /// Ruční připojení k zařízení ze seznamu `nalezenaZarizeni` (UI), pro
+    /// případ, že automatické rozpoznání podle jména/ID selže.
+    func pripojKRucne(_ zarizeni: NalezenePeripheral) {
+        Log.sdilene.zapis(.info, "ruční výběr ze seznamu: \(zarizeni.nazev)")
+        pripojK(zarizeni.peripheral)
     }
 
     private func pripojK(_ p: CBPeripheral) {
@@ -266,6 +323,54 @@ final class BLEManager: NSObject, ObservableObject {
                                    cmd: FunDoCommand.ciferníkDotazCmd, data: [])
         return odp.data
     }
+
+    // MARK: - Displej, ikona v menu, čas — OVĚŘENO na hodinkách (F10)
+
+    /// Rozsvítí displej hodinek. **Ověřeno** (F10). ⚠️ Podle stejného
+    /// pozorování spojení po odeslání spadne — appka to bere jako
+    /// očekávaný vedlejší účinek (`TabuleService.rozsvitDisplej` chybu
+    /// z odpojení nehlásí jako skutečnou chybu) a automaticky se zkusí
+    /// znovu připojit (`centralManager(_:didDisconnectPeripheral:error:)`).
+    @discardableResult
+    func rozsvitDisplej() async throws -> FunDoBody {
+        try await posli(modul: FunDoCommand.displejModul, typ: FunDoCommand.displejTyp, cmd: FunDoCommand.displejCmd, data: [0x01])
+    }
+
+    /// Zapne/vypne ikonu appky v menu hodinek. **Ověřeno** (F10).
+    @discardableResult
+    func nastavIkonuVMenu(zapnuto: Bool) async throws -> FunDoBody {
+        try await posli(modul: FunDoCommand.ikonaMenuModul, typ: FunDoCommand.ikonaMenuTyp,
+                         cmd: FunDoCommand.ikonaMenuCmd, data: [zapnuto ? 0x01 : 0x00])
+    }
+
+    /// Nastaví čas na hodinkách, data `[rok-2000, měsíc, den, hodina,
+    /// minuta, sekunda, 0]`. **Neověřeno samostatně** (F10 ho zmiňuje jako
+    /// součást úvodní sekvence oficiální appky).
+    @discardableResult
+    func nastavCas(_ datum: Date = Date()) async throws -> FunDoBody {
+        let kal = Calendar(identifier: .gregorian)
+        let c = kal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: datum)
+        let data: [UInt8] = [
+            UInt8(clamping: max(0, (c.year ?? 2026) - 2000)),
+            UInt8(clamping: c.month ?? 1),
+            UInt8(clamping: c.day ?? 1),
+            UInt8(clamping: c.hour ?? 0),
+            UInt8(clamping: c.minute ?? 0),
+            UInt8(clamping: c.second ?? 0),
+            0,
+        ]
+        return try await posli(modul: FunDoCommand.casModul, typ: FunDoCommand.casTyp, cmd: FunDoCommand.casCmd, data: data)
+    }
+
+    // MARK: - Volný rámec (ladění bez nového buildu)
+
+    /// Pošle libovolný rámec podle zadaných bajtů a vrátí syrovou
+    /// odpověď — ladicí nástroj pro zkoušení neznámých příkazů bez
+    /// nutnosti dělat nový build pokaždé.
+    @discardableResult
+    func posliVolnyRamec(modul: UInt8, typ: UInt8, cmd: UInt8, data: [UInt8]) async throws -> FunDoBody {
+        try await posli(modul: modul, typ: typ, cmd: cmd, data: data)
+    }
 }
 
 // MARK: - CBCentralManagerDelegate
@@ -276,6 +381,11 @@ extension BLEManager: CBCentralManagerDelegate {
             Log.sdilene.zapis(.info, "BLE stav: \(Self.popisStavuBluetooth(central.state))")
             if central.state == .poweredOn {
                 self.pripojSeUlozenym()
+                // Appka chtěla hledat, ale BT ještě nebyl zapnutý (viz
+                // `hledejAPripoj`) — teď je, tak sken doženeme.
+                if self.chceHledat {
+                    self.zahajSken()
+                }
             }
         }
     }
@@ -290,8 +400,24 @@ extension BLEManager: CBCentralManagerDelegate {
     nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                      advertisementData: [String: Any], rssi RSSI: NSNumber) {
         Task { @MainActor in
-            Log.sdilene.zapis(.info, "nalezeno: \(peripheral.name ?? peripheral.identifier.uuidString) · RSSI \(RSSI)")
-            self.pripojK(peripheral)
+            self.pridejNalezene(peripheral, rssi: RSSI.intValue)
+            let ulozenyId = UserDefaults.standard.string(forKey: Self.ulozenyIdentifierKlic)
+            let jeUlozene = ulozenyId == peripheral.identifier.uuidString
+            let jmenoSedi = (peripheral.name ?? "").lowercased().contains(Self.jmenoVzor)
+            if jeUlozene || jmenoSedi {
+                Log.sdilene.zapis(.info, "nalezeno (auto \(jeUlozene ? "podle ID" : "podle jména")): \(peripheral.name ?? peripheral.identifier.uuidString) · RSSI \(RSSI)")
+                self.pripojK(peripheral)
+            } else {
+                Log.sdilene.zapis(.info, "nalezeno: \(peripheral.name ?? peripheral.identifier.uuidString) · RSSI \(RSSI) (do seznamu, jméno/ID nesedí)")
+            }
+        }
+    }
+
+    private func pridejNalezene(_ p: CBPeripheral, rssi: Int) {
+        if let idx = nalezenaZarizeni.firstIndex(where: { $0.peripheral.identifier == p.identifier }) {
+            nalezenaZarizeni[idx] = NalezenePeripheral(peripheral: p, rssi: rssi)
+        } else {
+            nalezenaZarizeni.append(NalezenePeripheral(peripheral: p, rssi: rssi))
         }
     }
 
@@ -323,6 +449,13 @@ extension BLEManager: CBCentralManagerDelegate {
                 cont.resume(throwing: Chyba.nepripojeno)
             }
             self.cekajici.removeAll()
+            // Automatický reconnect — hodí se hlavně po `rozsvitDisplej()`
+            // (cmd 0x42), které podle F10 spojení pokaždé shodí, ale
+            // pomůže i po jiném neplánovaném odpojení.
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                self?.pripojSeUlozenym()
+            }
         }
     }
 
