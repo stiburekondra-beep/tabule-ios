@@ -7,12 +7,8 @@ name: build-ios
 on:
   push:
     branches: [main]
-    paths:
-      - "ios/**"
       - ".github/workflows/build-ios.yml"
   pull_request:
-    paths:
-      - "ios/**"
   workflow_dispatch: {}
 
 jobs:
