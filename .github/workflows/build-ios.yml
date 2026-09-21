@@ -49,14 +49,19 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             archive -archivePath build/Tabule.xcarchive
 
-      - name: Slož nepodepsanou .ipa
+      - name: Slož .ipa (ad-hoc podpis, aby ji AltStore přijal)
         run: |
           set -e
           mkdir -p build/Payload
           cp -R build/Tabule.xcarchive/Products/Applications/Tabule.app build/Payload/Tabule.app
+          # Xcode s vypnutým podepisováním nevytvoří _CodeSignature; AltStore ji čeká.
+          codesign --force --sign - --timestamp=none build/Payload/Tabule.app
+          codesign -dv build/Payload/Tabule.app 2>&1 | head -5
+          ls -la build/Payload/Tabule.app/_CodeSignature/ || true
           cd build
-          zip -r -y Tabule-unsigned.ipa Payload
+          zip -r -y -X Tabule-unsigned.ipa Payload
           cd ..
+          unzip -l build/Tabule-unsigned.ipa
 
       - name: Nahraj .ipa jako artefakt
         uses: actions/upload-artifact@v4
