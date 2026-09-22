@@ -18,7 +18,13 @@ final class Nastaveni: ObservableObject {
     }
 
     @Published var hubURL: String {
-        didSet { UserDefaults.standard.set(hubURL, forKey: Klic.hubURL) }
+        didSet {
+            // Adresa vložená z telefonu mívá na konci mezeru/nový řádek —
+            // 22. 9. kvůli tomu cockpit načítal `…/%20` a dostal 404.
+            let cista = hubURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cista != hubURL { hubURL = cista; return }
+            UserDefaults.standard.set(hubURL, forKey: Klic.hubURL)
+        }
     }
     @Published var hubToken: String {
         didSet { UserDefaults.standard.set(hubToken, forKey: Klic.hubToken) }
@@ -28,7 +34,13 @@ final class Nastaveni: ObservableObject {
     /// (např. `https://<tvuj-cockpit>/`) se sem zadává v appce,
     /// ne v kódu.
     @Published var cockpitURL: String {
-        didSet { UserDefaults.standard.set(cockpitURL, forKey: Klic.cockpitURL) }
+        didSet {
+            // Adresa vložená z telefonu mívá na konci mezeru/nový řádek —
+            // 22. 9. kvůli tomu cockpit načítal `…/%20` a dostal 404.
+            let cista = cockpitURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cista != cockpitURL { cockpitURL = cista; return }
+            UserDefaults.standard.set(cockpitURL, forKey: Klic.cockpitURL)
+        }
     }
 
     /// Režim „Šetřit" (Ondra, doplnění kvůli baterii): vypne tichou audio
@@ -54,7 +66,13 @@ final class Nastaveni: ObservableObject {
     /// každých ~5 s. Výchozí prázdné = appka log nikam neposílá (jen ho
     /// drží lokálně v appce). Viz F18 připomínka o logu.
     @Published var logServerURL: String {
-        didSet { UserDefaults.standard.set(logServerURL, forKey: Klic.logServerURL) }
+        didSet {
+            // Adresa vložená z telefonu mívá na konci mezeru/nový řádek —
+            // 22. 9. kvůli tomu cockpit načítal `…/%20` a dostal 404.
+            let cista = logServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cista != logServerURL { logServerURL = cista; return }
+            UserDefaults.standard.set(logServerURL, forKey: Klic.logServerURL)
+        }
     }
 
     private init() {

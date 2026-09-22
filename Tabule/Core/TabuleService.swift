@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -30,6 +31,12 @@ final class TabuleService: ObservableObject {
     private var posledniKontrolaHubu: Date = .distantPast
     private let minIntervalKontrolyS: TimeInterval = 20
     private var dlouhyPollTask: Task<Void, Never>?
+    /// Obrazovky sledují `TabuleService`, ale stav připojení žije
+    /// v `BLEManager`. Bez tohohle přeposlání se obrazovka překreslí jen
+    /// tehdy, když se změní něco TADY (chyba, průběh) — a mezitím ukazuje
+    /// „odpojeno" s vypnutými tlačítky, i když hodinky připojené jsou.
+    /// Přesně to Ondra viděl 22. 9. („nejde to").
+    private var bleSledovani: AnyCancellable?
     /// Jméno, pod kterým se appka hlásí Hubu v `/api/poll?machine=`
     /// (stejný mechanismus jako bridge stroje typu zan-bot). Natvrdo, není
     /// to tajemství — jen identifikátor kanálu.
@@ -37,6 +44,9 @@ final class TabuleService: ObservableObject {
 
     init(ble: BLEManager) {
         self.ble = ble
+        bleSledovani = ble.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         ble.naNotifikaci = { [weak self] in self?.probuditPriNotifikaci() }
         NowPlayingController.shared.naZmenuJinehoZvuku = { [weak self] hraje in self?.jinaHudbaHraje = hraje }
         // Stisk z MPRemoteCommandCenter (play/previous/next/pause) → zpracujStiskTlacitka

@@ -129,6 +129,16 @@ final class BLEManager: NSObject, ObservableObject {
     /// ručně přes `nalezenaZarizeni` (UI seznam).
     private func zahajSken() {
         chceHledat = false
+        // Už připojeno a služby nalezené → není co hledat. Dřív se tu při
+        // každém stisku „Připojit" spustil sken, `connect()` na už
+        // připojenou periferii a nové zjišťování služeb — v logu z 22. 9.
+        // sedmkrát za 14 s. Obrazovka mezitím blikala mezi „hledám" a
+        // „připojeno".
+        if let p = peripheral, p.state == .connected, zapisChar != nil {
+            Log.sdilene.zapis(.info, "už připojeno k \(p.name ?? "hodinkám"), sken se nespouští")
+            stav = .pripojeno(nazev: p.name ?? "hodinky")
+            return
+        }
         stav = .hledam
         nalezenaZarizeni = []
         Log.sdilene.zapis(.info, "skenování hodinek (bez filtru na službu)…")
@@ -453,12 +463,14 @@ extension BLEManager: CBCentralManagerDelegate {
         Task { @MainActor in
             Log.sdilene.zapis(.info, "BLE stav: \(Self.popisStavuBluetooth(central.state))")
             if central.state == .poweredOn {
+                // Nejdřív uložené hodinky; sken jen když se k nim nešlo
+                // rovnou připojit (dřív se spouštělo obojí naráz → dva
+                // souběžné pokusy o připojení, viz log 22. 9. 10:22:41).
                 self.pripojSeUlozenym()
-                // Appka chtěla hledat, ale BT ještě nebyl zapnutý (viz
-                // `hledejAPripoj`) — teď je, tak sken doženeme.
-                if self.chceHledat {
+                if self.chceHledat && self.peripheral == nil {
                     self.zahajSken()
                 }
+                self.chceHledat = false
             }
         }
     }
