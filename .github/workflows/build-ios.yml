@@ -8,6 +8,9 @@ on:
   pull_request:
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   build-and-test:
     runs-on: macos-latest
@@ -76,3 +79,22 @@ jobs:
           name: Tabule-xcarchive
           path: build/Tabule.xcarchive
           if-no-files-found: error
+
+      # Artefakt z Actions jde stáhnout jen po přihlášení — z iPhonu to
+      # nejde. Release je veřejný odkaz, na který se dá klepnout v Safari.
+      # Schváleno Ondrou 22. 9. 2026.
+      - name: Zverejni .ipa jako Release "nejnovejsi"
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          cp build/Tabule-unsigned.ipa build/Tabule.ipa
+          POPIS="Build #${{ github.run_number }} - commit ${{ github.sha }}"
+          if gh release view nejnovejsi >/dev/null 2>&1; then
+            gh release edit nejnovejsi --notes "$POPIS"
+            gh release upload nejnovejsi build/Tabule.ipa --clobber
+          else
+            gh release create nejnovejsi build/Tabule.ipa --title "Tabule - posledni build" --notes "$POPIS"
+          fi
+          echo "ke stazeni: https://github.com/${{ github.repository }}/releases/download/nejnovejsi/Tabule.ipa"
