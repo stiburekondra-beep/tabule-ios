@@ -89,4 +89,12 @@ extension Array where Element == UInt8 {
     var hexPopis: String {
         map { String(format: "%02x", $0) }.joined(separator: " ")
     }
+
+    /// Hex dump zkrácený na začátek — datové bloky ciferníku mají přes
+    /// 12 000 B a celý dump by do logu zapsal 36 KB na blok (18× za jeden
+    /// přenos). Do logu patří identifikace rámce, ne jeho obsah.
+    func hexPopisKratky(_ kolik: Int = 20) -> String {
+        guard count > kolik else { return hexPopis }
+        return Array(prefix(kolik)).hexPopis + " … (celkem \(count) B)"
+    }
 }

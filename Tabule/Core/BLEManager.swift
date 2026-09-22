@@ -63,6 +63,18 @@ final class BLEManager: NSObject, ObservableObject {
     private var notifyChar: CBCharacteristic?
     private var seq: UInt16 = 0x2000
     private var cekajici: [UInt16: (CheckedContinuation<FunDoBody, Error>, Task<Void, Never>)] = [:]
+    /// Čekající continuation pro `peripheralIsReady(toSendWriteWithoutResponse:)`
+    /// — viz `pockejNaPripravenost`.
+    private var pripravenKZapisu: CheckedContinuation<Void, Never>?
+    /// Buffer pro skládání příchozích rámců z notify — viz `slozPrichozi`.
+    private var prijimaciBuffer: [UInt8] = []
+    /// Pořadové číslo čekání na připravenost k zápisu — aby timeout
+    /// nepropustil continuation, která mezitím patří jinému čekání.
+    private var cisloCekani: UInt64 = 0
+    /// Strop pro deklarovanou délku těla rámce. Největší, co posíláme my,
+    /// je datový blok ~12,3 kB; z hodinek nic takového nechodí, ale strop
+    /// je tu proti zaseknutí na náhodném `0xBA` uprostřed dat.
+    private static let maxDelkaTela = 16384
     private let log = Logger(subsystem: "cz.baklazan.tabule", category: "BLE")
     /// `true`, když appka chtěla hledat (`hledejAPripoj()`), ale Bluetooth
     /// ještě nebyl `.poweredOn` — sken se spustí sám, jakmile
@@ -184,7 +196,7 @@ final class BLEManager: NSObject, ObservableObject {
         let s = dalsiSeq()
         let frame = FunDoFrame(direction: .phoneToWatch, seq: s, body: FunDoBody(modul: modul, typ: typ, cmd: cmd, data: data))
         let bytes = frame.encode()
-        Log.sdilene.zapis(.odeslano, "seq \(s) · \(Self.popisPrikazu(modul: modul, typ: typ, cmd: cmd)) · \(bytes.hexPopis)")
+        Log.sdilene.zapis(.odeslano, "seq \(s) · \(Self.popisPrikazu(modul: modul, typ: typ, cmd: cmd)) · \(bytes.hexPopisKratky())")
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<FunDoBody, Error>) in
             let timeoutTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeoutS * 1_000_000_000))
@@ -195,7 +207,68 @@ final class BLEManager: NSObject, ObservableObject {
                 }
             }
             cekajici[s] = (cont, timeoutTask)
-            peripheral.writeValue(Data(bytes), for: zapisChar, type: .withoutResponse)
+            Task { [weak self] in
+                await self?.zapisPoKusech(bytes, char: zapisChar, p: peripheral, seq: s)
+            }
+        }
+    }
+
+    // MARK: - Zápis po kusech podle MTU
+
+    /// Rozdělí rámec na kusy podle `maximumWriteValueLength` a pošle je za
+    /// sebou.
+    ///
+    /// **Proč:** datový blok ciferníku má 12 296 B, ale jeden BLE zápis
+    /// unese jen tolik, kolik dovolí vyjednané MTU (na iOS typicky
+    /// 182–512 B). `writeValue` s delšími daty CoreBluetooth **tiše
+    /// zahodí** — nevrátí chybu, jen se nic nestane a čekání na odpověď
+    /// skončí timeoutem. To byla příčina „zelená nefunguje" (22. 9.).
+    ///
+    /// Že se to takhle dělá, potvrzuje i odposlech oficiální appky
+    /// (F13-prenos-souboru.md): při skládání souboru se musely brát
+    /// i **pokračovací zápisy bez hlavičky `0xBA`** — tedy Android posílá
+    /// přesně tohle: první kus s hlavičkou rámce, zbytek jako holá data.
+    private func zapisPoKusech(_ bytes: [UInt8], char: CBCharacteristic,
+                               p: CBPeripheral, seq s: UInt16) async {
+        let mtu = Swift.max(20, p.maximumWriteValueLength(for: .withoutResponse))
+        guard bytes.count > mtu else {
+            p.writeValue(Data(bytes), for: char, type: .withoutResponse)
+            return
+        }
+        let pocet = (bytes.count + mtu - 1) / mtu
+        Log.sdilene.zapis(.info, "seq \(s) · rámec \(bytes.count) B > MTU \(mtu) B — dělím na \(pocet) zápisů")
+        var i = 0
+        while i < bytes.count {
+            await pockejNaPripravenost(p)
+            let konec = Swift.min(i + mtu, bytes.count)
+            p.writeValue(Data(bytes[i..<konec]), for: char, type: .withoutResponse)
+            i = konec
+        }
+    }
+
+    /// Počká, až je periferie připravená přijmout další write-without-response.
+    /// Bez tohohle se při rychlém odeslání 60+ kusů za sebou část zahodí ve
+    /// frontě CoreBluetooth. Timeout 2 s, aby se nedalo zaseknout navěky —
+    /// když callback nepřijde, pokračujeme a spolehneme se na timeout rámce.
+    private func pockejNaPripravenost(_ p: CBPeripheral) async {
+        if p.canSendWriteWithoutResponse { return }
+        // Předchozí čekání (kdyby nějaké zbylo) propustíme — continuation,
+        // která se nikdy neresumne, je v Swiftu chyba za běhu.
+        if let stary = pripravenKZapisu {
+            pripravenKZapisu = nil
+            stary.resume()
+        }
+        cisloCekani &+= 1
+        let moje = cisloCekani
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            pripravenKZapisu = cont
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let self, self.cisloCekani == moje, let c = self.pripravenKZapisu else { return }
+                self.pripravenKZapisu = nil
+                Log.sdilene.zapis(.chyba, "čekání na připravenost k zápisu vypršelo (2 s) — posílám dál")
+                c.resume()
+            }
         }
     }
 
@@ -449,6 +522,13 @@ extension BLEManager: CBCentralManagerDelegate {
                 cont.resume(throwing: Chyba.nepripojeno)
             }
             self.cekajici.removeAll()
+            // Buffer nesmí přežít odpojení — půlka rámce z minulého spojení
+            // by se po reconnectu slepila s novými daty.
+            self.prijimaciBuffer.removeAll()
+            if let c = self.pripravenKZapisu {
+                self.pripravenKZapisu = nil
+                c.resume()
+            }
             // Automatický reconnect — hodí se hlavně po `rozsvitDisplej()`
             // (cmd 0x42), které podle F10 spojení pokaždé shodí, ale
             // pomůže i po jiném neplánovaném odpojení.
@@ -503,8 +583,21 @@ extension BLEManager: CBPeripheralDelegate {
                 }
             }
             if self.zapisChar != nil {
-                Log.sdilene.zapis(.info, "charakteristiky nalezeny, notify zapnuto — připojeno")
+                let mtu = peripheral.maximumWriteValueLength(for: .withoutResponse)
+                Log.sdilene.zapis(.info, "charakteristiky nalezeny, notify zapnuto — připojeno (MTU zápisu \(mtu) B)")
                 self.stav = .pripojeno(nazev: peripheral.name ?? "hodinky")
+            }
+        }
+    }
+
+    /// CoreBluetooth hlásí, že fronta write-without-response se uvolnila.
+    /// Probudí `pockejNaPripravenost` — bez toho by se při odesílání
+    /// dlouhého datového bloku část kusů ztratila.
+    nonisolated func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        Task { @MainActor in
+            if let c = self.pripravenKZapisu {
+                self.pripravenKZapisu = nil
+                c.resume()
             }
         }
     }
@@ -515,21 +608,65 @@ extension BLEManager: CBPeripheralDelegate {
         Task { @MainActor in
             self.posledniNotifikace = Date()
             self.naNotifikaci?()
-            Log.sdilene.zapis(.prijato, bytes.hexPopis)
-            switch FunDoFrame.decode(bytes) {
-            case .success(let frame):
-                if let (cont, timeoutTask) = self.cekajici.removeValue(forKey: frame.seq) {
-                    timeoutTask.cancel()
-                    Log.sdilene.zapis(.info, "seq \(frame.seq) sedí · \(Self.popisPrikazu(modul: frame.body.modul, typ: frame.body.typ, cmd: frame.body.cmd))")
-                    cont.resume(returning: frame.body)
-                } else {
-                    Log.sdilene.zapis(.info, "seq \(frame.seq) nesedí žádnému čekajícímu požadavku (nepárovaný rámec)")
-                    self.naNeparovanyRamec?(frame)
-                }
-            case .failure(let err):
-                Log.sdilene.zapis(.chyba, "nerozpoznaný rámec z hodinek: \(String(describing: err))")
-                self.log.debug("nerozpoznaný rámec z hodinek: \(String(describing: err))")
+            Log.sdilene.zapis(.prijato, bytes.hexPopisKratky())
+            for frame in self.slozPrichozi(bytes) {
+                self.zpracujRamec(frame)
             }
+        }
+    }
+
+    /// Přidá přijaté bajty do skládacího bufferu a vrátí všechny kompletní
+    /// rámce, které z něj jdou přečíst.
+    ///
+    /// **Proč:** odpověď delší než jedno notify (MTU) přijde po částech
+    /// a `FunDoFrame.decode` na samotném kusu skončí `lengthMismatch` —
+    /// rámec se zahodil a čekající požadavek spadl na timeout. Stejná
+    /// chyba jako při rozboru odposlechu (F13: „zahazoval jsem pokračovací
+    /// zápisy"), jen ve směru k telefonu.
+    ///
+    /// Když buffer nezačíná magicem `0xBA`, zahodí se bajty až k nejbližšímu
+    /// `0xBA` — jinak by jediný ztracený bajt zasekl příjem natrvalo.
+    private func slozPrichozi(_ kus: [UInt8]) -> [FunDoFrame] {
+        prijimaciBuffer.append(contentsOf: kus)
+        var hotove: [FunDoFrame] = []
+        while true {
+            guard let zacatek = prijimaciBuffer.firstIndex(of: 0xBA) else {
+                prijimaciBuffer.removeAll()
+                break
+            }
+            if zacatek > 0 {
+                Log.sdilene.zapis(.chyba, "zahazuji \(zacatek) B před magicem 0xBA (rozsynchronizovaný příjem)")
+                prijimaciBuffer.removeFirst(zacatek)
+            }
+            guard prijimaciBuffer.count >= 8 else { break }
+            let delkaTela = Int(prijimaciBuffer[2]) << 8 | Int(prijimaciBuffer[3])
+            let celkem = 8 + delkaTela
+            guard delkaTela <= Self.maxDelkaTela else {
+                Log.sdilene.zapis(.chyba, "nesmyslná délka těla \(delkaTela) B — zahazuji magic a hledám další")
+                prijimaciBuffer.removeFirst()
+                continue
+            }
+            guard prijimaciBuffer.count >= celkem else { break } // čekáme na zbytek
+            let ramec = Array(prijimaciBuffer[0..<celkem])
+            prijimaciBuffer.removeFirst(celkem)
+            switch FunDoFrame.decode(ramec) {
+            case .success(let f):
+                hotove.append(f)
+            case .failure(let err):
+                Log.sdilene.zapis(.chyba, "nerozpoznaný rámec z hodinek: \(String(describing: err)) · \(ramec.hexPopisKratky())")
+            }
+        }
+        return hotove
+    }
+
+    private func zpracujRamec(_ frame: FunDoFrame) {
+        if let (cont, timeoutTask) = cekajici.removeValue(forKey: frame.seq) {
+            timeoutTask.cancel()
+            Log.sdilene.zapis(.info, "seq \(frame.seq) sedí · \(Self.popisPrikazu(modul: frame.body.modul, typ: frame.body.typ, cmd: frame.body.cmd))")
+            cont.resume(returning: frame.body)
+        } else {
+            Log.sdilene.zapis(.info, "seq \(frame.seq) nesedí žádnému čekajícímu požadavku (nepárovaný rámec)")
+            naNeparovanyRamec?(frame)
         }
     }
 }
