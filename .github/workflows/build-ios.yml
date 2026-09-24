@@ -1,10 +1,11 @@
 name: build-ios
 
 # Build bez Macu: XcodeGen → testy na simulátoru → archiv bez podpisu → nepodepsaná .ipa
-# k instalaci přes AltStore. Spouští se při každém pushi na main.
+# k instalaci přes AltStore. Spouští se při každém pushi na jakoukoli větev —
+# úpravy CI se tak ladí na vedlejší větvi, ne sérií červených runů na main
+# (21.–22. 9. 2026). Release "nejnovejsi" dál vzniká jen z main (viz if: níž).
 on:
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch: {}
 
